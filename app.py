@@ -3,6 +3,7 @@ from flask_cors import CORS
 import requests
 import io
 from PIL import Image
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -49,6 +50,7 @@ def detect():
         print(f"Error processing image or contacting Roboflow: {e}")
         return jsonify({"error": f"Server error during image processing: {str(e)}"}), 500
     
-    
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
