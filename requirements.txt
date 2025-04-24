@@ -1,3 +1,5 @@
 flask==2.0.1
 werkzeug==2.0.1
-# add any other packages you use
+flask-cors==3.0.10
+requests==2.28.1
+Pillow==9.2.0
