@@ -2,14 +2,14 @@ body {
     margin: 0;
     padding: 20px;
     text-align: center;
-    background-color: #111;
+    background-color: floralwhite;
     color: white;
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   }
   
   h2 {
     margin-top: 30px;
-    color: #00ffcc;
+    color: burlywood;
   }
   
   video,
@@ -24,7 +24,7 @@ body {
   input[type="file"] {
     margin-top: 20px;
     padding: 10px;
-    background: #00ffcc;
+    background: beige;
     border: none;
     color: #111;
     border-radius: 6px;
@@ -39,7 +39,7 @@ body {
   button {
     margin-top: 10px;
     padding: 10px 20px;
-    background-color: #00ffcc;
+    background-color:sienna;
     color: #111;
     border: none;
     border-radius: 6px;
@@ -54,7 +54,7 @@ body {
   .prediction-results {
     margin-top: 20px;
     padding: 10px;
-    background-color: #f0f0f0;
+    background-color: black;
     border-radius: 5px;
   }
   
