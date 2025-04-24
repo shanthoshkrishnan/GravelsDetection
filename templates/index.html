@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <title>Gravel Detector</title>
+</head>
+<body>
+
+  <h2>Gravel Detection - Live Camera</h2>
+  <button id="toggleCamera">Start Camera</button>
+
+  <div id="cameraContainer">
+    <video id="video" width="640" height="480" autoplay muted playsinline></video>
+    <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
+    <!-- Results will be displayed here -->
+  </div>
+
+  <h2>Upload Image for Detection</h2>
+  <input type="file" id="upload" accept="image/*" />
+  <button id="submitUpload">Submit</button>
+  <img id="uploadedImage" style="max-width: 640px; display:none;" />
+  <canvas id="uploadCanvas" width="640" height="480" style="display:none;"></canvas>
+
+  <!-- Updated the path to main.js using url_for -->
+  <script src="{{ url_for('static', filename='main.js') }}"></script>
+</body>
+</html>
