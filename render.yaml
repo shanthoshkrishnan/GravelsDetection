@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: gravels-app
+    env: python
+    buildCommand: "./render-build.sh"
+    startCommand: "python app.py"  # <-- change if you're using a different start command
+    runtime: python
+    region: oregon
+    branch: main
+    repo: https://github.com/SHANTHOSHHH/GravelsDetection
