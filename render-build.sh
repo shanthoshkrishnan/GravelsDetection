@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -o errexit
 
+# Manually install the desired Python version (assuming pyenv is available)
+pyenv install 3.10.3
+pyenv global 3.10.3
+python -V 
+
 # Upgrade pip and build tools
 pip install --upgrade pip setuptools wheel
 
@@ -15,3 +20,5 @@ pip install opencv-python-headless==4.5.3.56
 
 # Step 4: Install the rest of the project dependencies
 pip install -r requirements.txt
+
+

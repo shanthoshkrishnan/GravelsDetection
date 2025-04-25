@@ -1,10 +1,10 @@
 services:
   - type: web
-    name: gravels-app
+    name: backend
     env: python
-    buildCommand: "./render-build.sh"
-    startCommand: "python app.py"  # <-- change if you're using a different start command
-    runtime: python
-    region: oregon
-    branch: main
-    repo: https://github.com/SHANTHOSHHH/GravelsDetection
+    runtime: python-3.10.3  # Ensure you're specifying the version explicitly
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    buildFilter:
+      paths: ["backend/**"]
+    rootDir: backend
