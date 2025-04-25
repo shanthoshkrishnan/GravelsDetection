@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Exit on error
-set -e
+set -o errexit
 
-# Ensure pip, setuptools, and wheel are up-to-date
-pip install --upgrade pip setuptools wheel
+# Update pip
+pip install --upgrade pip wheel setuptools
 
-# Install NumPy first using binary package
-pip install numpy==1.24.3 --only-binary=numpy
+# Install pre-compiled numpy wheel directly
+pip install https://files.pythonhosted.org/packages/5a/50/19332b6d3f2033a16553f921fff692bb700ff8028c42865c935e1d56c7b2/numpy-1.22.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 
-# Install the rest of the Python dependencies
+# Install the rest
 pip install -r requirements.txt
