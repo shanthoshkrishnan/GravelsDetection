@@ -6,7 +6,7 @@ set -o errexit
 pip install --upgrade pip wheel setuptools
 
 # Install specific versions from PyPI using binary-only approach
-pip install --only-binary=:all: numpy==1.21.6
+pip install --only-binary=:all: numpy>=1.24,<1.27
 
 # Install opencv-python-headless last
 pip install opencv-python-headless==4.5.3.56
