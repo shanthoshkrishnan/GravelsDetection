@@ -9,19 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy requirements and install dependencies
 COPY requirements.txt .
 
-# Modify requirements.txt to exclude numpy
-RUN grep -v "numpy" requirements.txt > requirements_no_numpy.txt
-
-# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir numpy==1.22.4 --only-binary=:all: && \
-    pip install --no-cache-dir -r requirements_no_numpy.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip uninstall -y opencv-python opencv-python-headless && \
+    pip install --no-cache-dir opencv-python-headless==4.5.1.48 && \
+    pip freeze  # 💡 This line helps debug by showing all installed packages
 
-# Copy application code
+# Copy project files
 COPY . .
 
-# Command to run the application
+# Run app
 CMD ["python", "app.py"]
