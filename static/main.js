@@ -8,10 +8,43 @@ const uploadedImage = document.getElementById('uploadedImage');
 const uploadCanvas = document.getElementById('uploadCanvas');
 const uploadCtx = uploadCanvas.getContext('2d');
 
-// Flag to track if camera is on
+const switchCameraButton = document.getElementById('switchCamera');
+switchCameraButton.style.display = 'none'; // Hide initially until we check for camera support
+
+// Flag to track if camera is on and current camera settings
 let isCameraOn = false;
 let stream = null;
 let captureInterval = null;
+let currentFacingMode = 'user'; // Default to front camera ('user' = front, 'environment' = back)
+let availableCameras = [];
+let currentCameraIndex = 0;
+
+// Check for available cameras
+async function getAvailableCameras() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    console.log("enumerateDevices() not supported.");
+    return [];
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter(device => device.kind === 'videoinput');
+    console.log('Available cameras:', cameras);
+    return cameras;
+  } catch (err) {
+    console.error('Error enumerating devices:', err);
+    return [];
+  }
+}
+
+// Initialize camera options when page loads
+window.addEventListener('DOMContentLoaded', async () => {
+  availableCameras = await getAvailableCameras();
+  // Only show switch button if we have more than one camera
+  if (availableCameras.length > 1) {
+    switchCameraButton.style.display = 'inline-block';
+  }
+});
 
 // Start or stop camera
 toggleCameraButton.addEventListener('click', async () => {
@@ -19,6 +52,22 @@ toggleCameraButton.addEventListener('click', async () => {
     stopCamera();
   } else {
     startCamera();
+  }
+});
+
+// Switch camera
+switchCameraButton.addEventListener('click', async () => {
+  if (!isCameraOn) return;
+  
+  // For mobile: switch between front and back
+  if (/Mobi|Android/i.test(navigator.userAgent)) {
+    currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+    await startCamera(); // Restart camera with new facing mode
+  } 
+  // For desktop: switch between available cameras
+  else {
+    currentCameraIndex = (currentCameraIndex + 1) % availableCameras.length;
+    await startCamera(); // Restart camera with new device ID
   }
 });
 
@@ -30,12 +79,27 @@ async function startCamera() {
       stopCamera();
     }
     
+    // Configure camera constraints based on device
+    let constraints = { video: {} };
+    
+    // For mobile: use facingMode constraint
+    if (/Mobi|Android/i.test(navigator.userAgent)) {
+      constraints.video = { facingMode: currentFacingMode };
+      console.log(`Using ${currentFacingMode === 'user' ? 'front' : 'back'} camera`);
+    } 
+    // For desktop: use deviceId if available
+    else if (availableCameras.length > 0) {
+      constraints.video = { deviceId: { exact: availableCameras[currentCameraIndex].deviceId } };
+      console.log(`Using camera: ${availableCameras[currentCameraIndex].label || 'Camera ' + (currentCameraIndex + 1)}`);
+    }
+    
     // Try to access the camera
-    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
     video.style.display = 'block'; // Show video element
     canvas.style.display = 'none'; // Hide canvas initially
     toggleCameraButton.textContent = "Stop Camera";
+    switchCameraButton.style.display = availableCameras.length > 1 ? 'inline-block' : 'none'; // Show switch button when camera is on and multiple cameras available
     isCameraOn = true;
 
     // Clear any previous intervals
@@ -43,14 +107,16 @@ async function startCamera() {
       clearInterval(captureInterval);
     }
 
-    // Capture frames and send them to Flask backend
+    // Capture frames and send them to Flask backend using Inference SDK
     captureInterval = setInterval(() => {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(sendToBackend, 'image/jpeg');
-    }, 1500);
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(sendToBackend, 'image/jpeg', 0.8); // Slightly better quality (0.8)
+      }
+    }, 1000); // Capture every second for better performance
   } catch (error) {
     console.error('Error accessing camera: ', error);
-    alert('Failed to access the camera. Please check your permissions.');
+    alert('Failed to access the camera. Please check your permissions or try another camera.');
   }
 }
 
@@ -68,7 +134,14 @@ function stopCamera() {
   video.style.display = 'none'; // Hide video element
   canvas.style.display = 'none'; // Hide canvas
   toggleCameraButton.textContent = "Start Camera";
+  switchCameraButton.style.display = 'none'; // Hide switch button when camera is off
   isCameraOn = false;
+  
+  // Remove any displayed results
+  const oldResults = document.querySelector('.prediction-results');
+  if (oldResults) {
+    oldResults.remove();
+  }
 }
 
 // Upload and send image to Flask backend
@@ -142,17 +215,37 @@ function showImageWithBoundingBoxes(file, predictions) {
     // Draw the image onto the canvas
     uploadCtx.drawImage(img, 0, 0);
     
-    // Draw bounding boxes
+    // Draw bounding boxes - updated to handle different response formats
     predictions.forEach(pred => {
-      const [x, y, width, height] = pred.bbox;
+      // Extract bounding box coordinates based on response format
+      let x, y, width, height;
+      
+      // Handle different prediction formats
+      if (pred.bbox) {
+        // Format: [x, y, width, height]
+        [x, y, width, height] = pred.bbox;
+      } else if (pred.x !== undefined && pred.width !== undefined) {
+        // Format: {x, y, width, height} with x,y at center
+        x = pred.x - (pred.width / 2);
+        y = pred.y - (pred.height / 2);
+        width = pred.width;
+        height = pred.height;
+      } else {
+        console.error('Unknown prediction format:', pred);
+        return;
+      }
+      
       uploadCtx.strokeStyle = 'lime';
       uploadCtx.lineWidth = 2;
       uploadCtx.strokeRect(x, y, width, height);
       
       // Add label with confidence score
+      const label = pred.label || pred.class || 'Object';
+      const confidence = pred.confidence || pred.score || 0;
+      
       uploadCtx.fillStyle = 'lime';
       uploadCtx.font = '16px sans-serif';
-      uploadCtx.fillText(`${pred.label} (${(pred.confidence * 100).toFixed(1)}%)`, 
+      uploadCtx.fillText(`${label} (${(confidence * 100).toFixed(1)}%)`, 
         x, y > 20 ? y - 5 : y + 20);
     });
     
@@ -187,6 +280,12 @@ function sendToBackend(blob) {
       // If no predictions, just show the video
       canvas.style.display = 'none';
       video.style.display = 'block';
+      
+      // If there were previous results displayed, remove them
+      const oldResults = document.querySelector('.prediction-results');
+      if (oldResults) {
+        oldResults.remove();
+      }
     }
   })
   .catch(error => console.error('Error:', error));
@@ -200,19 +299,43 @@ function drawPredictions(predictions) {
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);  
   
   predictions.forEach(pred => {
-    const [x, y, width, height] = pred.bbox;
+    // Extract bounding box coordinates based on response format
+    let x, y, width, height;
+    
+    // Handle different prediction formats
+    if (pred.bbox) {
+      // Format: [x, y, width, height]
+      [x, y, width, height] = pred.bbox;
+    } else if (pred.x !== undefined && pred.width !== undefined) {
+      // Format: {x, y, width, height} with x,y at center
+      x = pred.x - (pred.width / 2);
+      y = pred.y - (pred.height / 2);
+      width = pred.width;
+      height = pred.height;
+    } else {
+      console.error('Unknown prediction format:', pred);
+      return;
+    }
+    
+    // Get label and confidence
+    const label = pred.label || pred.class || 'Object';
+    const confidence = pred.confidence || pred.score || 0;
+    
     ctx.strokeStyle = 'lime';
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, width, height);
     ctx.fillStyle = 'lime';
     ctx.font = '16px sans-serif';
-    ctx.fillText(`${pred.label} (${(pred.confidence * 100).toFixed(1)}%)`, 
+    ctx.fillText(`${label} (${(confidence * 100).toFixed(1)}%)`, 
       x, y > 20 ? y - 5 : y + 20);
   });
   
   // Hide video and show canvas with predictions
   video.style.display = 'none';
   canvas.style.display = 'block';
+  
+  // Display text results
+  displayPredictionResults(predictions);
 }
 
 // Display just the prediction results as text
@@ -223,8 +346,12 @@ function displayPredictionResults(predictions) {
   
   const resultsList = document.createElement('ul');
   predictions.forEach(pred => {
+    // Get label and confidence
+    const label = pred.label || pred.class || 'Object';
+    const confidence = pred.confidence || pred.score || 0;
+    
     const listItem = document.createElement('li');
-    listItem.textContent = `${pred.label}: ${(pred.confidence * 100).toFixed(1)}% confidence`;
+    listItem.textContent = `${label}: ${(confidence * 100).toFixed(1)}% confidence`;
     resultsList.appendChild(listItem);
   });
   
@@ -239,3 +366,64 @@ function displayPredictionResults(predictions) {
   // Add the results to the container
   document.getElementById('cameraContainer').appendChild(resultsDiv);
 }
+
+// Add this function at the end of your JavaScript file
+
+// Function to clear results from server
+function clearResults() {
+  fetch('/clear_results')
+    .then(response => response.json())
+    .then(data => {
+      alert(data.message);
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      alert('Error clearing results');
+    });
+}
+
+// Add a small functions to show download buttons after detections
+function addDownloadOptions() {
+  // Check if download section already exists
+  const existingDownloadSection = document.querySelector('.download-options');
+  if (existingDownloadSection) {
+    return; // Don't create duplicates
+  }
+  
+  // Create download options container
+  const downloadDiv = document.createElement('div');
+  downloadDiv.className = 'download-options';
+  
+  // Create download buttons
+  const csvButton = document.createElement('button');
+  csvButton.textContent = 'Download Results (CSV)';
+  csvButton.onclick = () => window.location.href = '/download_csv';
+  
+  const jsonButton = document.createElement('button');
+  jsonButton.textContent = 'Download Results (JSON)';
+  jsonButton.onclick = () => window.location.href = '/download_json';
+  
+  const clearButton = document.createElement('button');
+  clearButton.textContent = 'Clear Results';
+  clearButton.onclick = clearResults;
+  
+  // Add buttons to container
+  downloadDiv.appendChild(csvButton);
+  downloadDiv.appendChild(jsonButton);
+  downloadDiv.appendChild(clearButton);
+  
+  // Add the container to the page
+  document.getElementById('cameraContainer').appendChild(downloadDiv);
+}
+
+// Modify the displayPredictionResults function to add download options
+const originalDisplayPredictionResults = displayPredictionResults;
+displayPredictionResults = function(predictions) {
+  // Call the original function
+  originalDisplayPredictionResults(predictions);
+  
+  // Add download options after showing results
+  if (predictions && predictions.length > 0) {
+    addDownloadOptions();
+  }
+};

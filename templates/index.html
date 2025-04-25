@@ -7,23 +7,43 @@
   <title>Gravel Detector</title>
 </head>
 <body>
-
   <h2>Gravel Detection - Live Camera</h2>
   <button id="toggleCamera">Start Camera</button>
-
+  <button id="switchCamera" >Switch Camera</button>
+  
   <div id="cameraContainer">
     <video id="video" width="640" height="480" autoplay muted playsinline></video>
     <canvas id="canvas" width="640" height="480" style="display:none;"></canvas>
     <!-- Results will be displayed here -->
   </div>
-
+  
   <h2>Upload Image for Detection</h2>
   <input type="file" id="upload" accept="image/*" />
   <button id="submitUpload">Submit</button>
   <img id="uploadedImage" style="max-width: 640px; display:none;" />
   <canvas id="uploadCanvas" width="640" height="480" style="display:none;"></canvas>
-
-  <!-- Updated the path to main.js using url_for -->
+  
+  <!-- Download buttons -->
+  <div class="download-section">
+    <h2>Download Detection Results</h2>
+    <button onclick="window.location.href='/download_csv'" class="btn">Download CSV</button>
+    <button onclick="window.location.href='/download_json'" class="btn">Download JSON</button>
+    <button onclick="clearResults()" class="btn">Clear Results</button>
+  </div>
+  
   <script src="{{ url_for('static', filename='main.js') }}"></script>
+  <script>
+    function clearResults() {
+      fetch('/clear_results')
+        .then(response => response.json())
+        .then(data => {
+          alert(data.message);
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('Error clearing results');
+        });
+    }
+  </script>
 </body>
 </html>
