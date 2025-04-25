@@ -2,7 +2,7 @@ services:
   - type: web
     name: backend
     env: python
-    runtime: python-3.10.3  # Ensure you're specifying the version explicitly
+    runtime: python-3.10.13  # Ensure you're specifying the version explicitly
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     buildFilter:
