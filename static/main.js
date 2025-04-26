@@ -304,6 +304,8 @@ document.addEventListener('DOMContentLoaded', function() {
     img.src = imageUrl;
     
     img.onload = () => {
+      console.log(`Uploaded image dimensions: ${img.naturalWidth}x${img.naturalHeight}`);
+      
       // Set canvas dimensions to match the image
       uploadCanvas.width = img.naturalWidth;
       uploadCanvas.height = img.naturalHeight;
@@ -312,8 +314,12 @@ document.addEventListener('DOMContentLoaded', function() {
       // Draw the image onto the canvas
       uploadCtx.drawImage(img, 0, 0);
       
+      console.log("Raw predictions for uploaded image:", JSON.stringify(predictions));
+      
       // Draw bounding boxes - updated to handle different response formats
       predictions.forEach(pred => {
+        console.log("Processing prediction:", pred);
+        
         // Extract bounding box coordinates based on response format
         let x, y, width, height;
         
@@ -332,18 +338,21 @@ document.addEventListener('DOMContentLoaded', function() {
           return;
         }
         
-        uploadCtx.strokeStyle = 'lime';
-        uploadCtx.lineWidth = 2;
+        console.log(`Drawing box at: ${x},${y} with size ${width}x${height}`);
+        
+        uploadCtx.strokeStyle = '#00FF00'; // Bright lime green
+        uploadCtx.lineWidth = Math.max(2, uploadCanvas.width / 200); // Thicker lines on higher resolution
         uploadCtx.strokeRect(x, y, width, height);
         
         // Add label with confidence score
         const label = pred.label || pred.class || 'Object';
         const confidence = pred.confidence || pred.score || 0;
         
-        uploadCtx.fillStyle = 'lime';
-        uploadCtx.font = '16px sans-serif';
+        uploadCtx.fillStyle = '#00FF00'; // Bright lime green
+        const fontSize = Math.max(16, uploadCanvas.width / 40); // Responsive font size
+        uploadCtx.font = `${fontSize}px sans-serif`;
         uploadCtx.fillText(`${label} (${(confidence * 100).toFixed(1)}%)`, 
-          x, y > 20 ? y - 5 : y + 20);
+          x, y > fontSize ? y - 5 : y + fontSize + 5);
       });
       
       // Also display text results
@@ -375,8 +384,11 @@ document.addEventListener('DOMContentLoaded', function() {
       return response.json();
     })
     .then(data => {
+      console.log("Full response data:", JSON.stringify(data));
+      
       if (data.predictions && data.predictions.length > 0) {
         console.log("Predictions received:", data.predictions.length);
+        console.log("Raw prediction data:", JSON.stringify(data.predictions));
         drawPredictions(data.predictions);
       } else {
         console.log("No predictions found in response");
@@ -396,46 +408,58 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Draw predictions on camera canvas
+  // Draw predictions on camera canvas - UPDATED for better mobile visibility
   function drawPredictions(predictions) {
     // Clear previous canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);  
     // Redraw video frame
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);  
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    // Get actual canvas display dimensions (important for mobile scaling)
+    const displayWidth = canvas.clientWidth;
+    const displayHeight = canvas.clientHeight;
+    const scaleX = canvas.width / displayWidth;
+    const scaleY = canvas.height / displayHeight;
+    
+    console.log(`Canvas dimensions: ${canvas.width}x${canvas.height}, Display: ${displayWidth}x${displayHeight}`);
     
     predictions.forEach(pred => {
-      // Extract bounding box coordinates based on response format
+      console.log("Drawing prediction:", pred);
       let x, y, width, height;
       
       // Handle different prediction formats
       if (pred.bbox) {
-        // Format: [x, y, width, height]
         [x, y, width, height] = pred.bbox;
       } else if (pred.x !== undefined && pred.width !== undefined) {
-        // Format: {x, y, width, height} with x,y at center
-        x = pred.x - (pred.width / 2);
-        y = pred.y - (pred.height / 2);
+        // Get coordinates properly scaled to the canvas size
+        x = (pred.x - (pred.width / 2));
+        y = (pred.y - (pred.height / 2));
         width = pred.width;
         height = pred.height;
+        
+        console.log(`Drawing box at: ${x},${y} with size ${width}x${height}`);
       } else {
         console.error('Unknown prediction format:', pred);
         return;
       }
       
-      // Get label and confidence
+      // Draw with more visible colors on mobile
+      ctx.strokeStyle = '#00FF00'; // Bright green
+      ctx.lineWidth = Math.max(2, canvas.width / 200); // Thicker lines on higher resolution displays
+      ctx.strokeRect(x, y, width, height);
+      
+      // Label with better visibility
       const label = pred.label || pred.class || 'Object';
       const confidence = pred.confidence || pred.score || 0;
       
-      ctx.strokeStyle = 'lime';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, width, height);
-      ctx.fillStyle = 'lime';
-      ctx.font = '16px sans-serif';
-      ctx.fillText(`${label} (${(confidence * 100).toFixed(1)}%)`, 
-        x, y > 20 ? y - 5 : y + 20);
+      ctx.fillStyle = '#00FF00'; // Bright green
+      const fontSize = Math.max(16, canvas.width / 40); // Responsive font size
+      ctx.font = `${fontSize}px sans-serif`;
+      ctx.fillText(`${label} ${(confidence * 100).toFixed(1)}%`, 
+                   x, y > fontSize ? y - 5 : y + fontSize + 5);
     });
     
-    // Hide video and show canvas with predictions
+    // Show canvas with predictions
     video.style.display = 'none';
     canvas.style.display = 'block';
     
@@ -490,7 +514,7 @@ document.addEventListener('DOMContentLoaded', function() {
       });
   }
 
-  // Function to show download buttons after detections
+  // UPDATED: Function to show download buttons after detections with direct links for mobile
   function addDownloadOptions() {
     // Check if download section already exists
     const existingDownloadSection = document.querySelector('.download-options');
@@ -502,23 +526,49 @@ document.addEventListener('DOMContentLoaded', function() {
     const downloadDiv = document.createElement('div');
     downloadDiv.className = 'download-options';
     
-    // Create download buttons
-    const csvButton = document.createElement('button');
-    csvButton.textContent = 'Download Results (CSV)';
-    csvButton.onclick = () => window.location.href = '/download_csv';
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
     
-    const jsonButton = document.createElement('button');
-    jsonButton.textContent = 'Download Results (JSON)';
-    jsonButton.onclick = () => window.location.href = '/download_json';
-    
-    const clearButton = document.createElement('button');
-    clearButton.textContent = 'Clear Results';
-    clearButton.onclick = clearResults;
-    
-    // Add buttons to container
-    downloadDiv.appendChild(csvButton);
-    downloadDiv.appendChild(jsonButton);
-    downloadDiv.appendChild(clearButton);
+    if (isMobile) {
+      // Create direct links for mobile
+      const csvLink = document.createElement('a');
+      csvLink.href = '/download_csv';
+      csvLink.textContent = 'Download Results (CSV)';
+      csvLink.className = 'download-button';
+      csvLink.setAttribute('download', ''); // Force download attribute
+      
+      const jsonLink = document.createElement('a');  
+      jsonLink.href = '/download_json';
+      jsonLink.textContent = 'Download Results (JSON)';
+      jsonLink.className = 'download-button';
+      jsonLink.setAttribute('download', ''); // Force download attribute
+      
+      const clearButton = document.createElement('button');
+      clearButton.textContent = 'Clear Results';
+      clearButton.onclick = clearResults;
+      
+      // Add links/buttons to container
+      downloadDiv.appendChild(csvLink);
+      downloadDiv.appendChild(jsonLink);
+      downloadDiv.appendChild(clearButton);
+    } else {
+      // Create download buttons for desktop
+      const csvButton = document.createElement('button');
+      csvButton.textContent = 'Download Results (CSV)';
+      csvButton.onclick = () => window.location.href = '/download_csv';
+      
+      const jsonButton = document.createElement('button');
+      jsonButton.textContent = 'Download Results (JSON)';
+      jsonButton.onclick = () => window.location.href = '/download_json';
+      
+      const clearButton = document.createElement('button');
+      clearButton.textContent = 'Clear Results';
+      clearButton.onclick = clearResults;
+      
+      // Add buttons to container
+      downloadDiv.appendChild(csvButton);
+      downloadDiv.appendChild(jsonButton);
+      downloadDiv.appendChild(clearButton);
+    }
     
     // Add the container to the page
     document.getElementById('cameraContainer').appendChild(downloadDiv);
