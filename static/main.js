@@ -133,8 +133,12 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // For mobile: use facingMode constraint
       if (/Mobi|Android/i.test(navigator.userAgent)) {
-        constraints.video = { facingMode: currentFacingMode };
-        console.log(`Using ${currentFacingMode === 'user' ? 'front' : 'back'} camera`);
+        constraints.video = { 
+          facingMode: currentFacingMode,
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        };
+        console.log(`Using ${currentFacingMode === 'user' ? 'front' : 'back'} camera with specified dimensions`);
       } 
       // For desktop: use deviceId if available
       else if (availableCameras.length > 0) {
@@ -145,6 +149,15 @@ document.addEventListener('DOMContentLoaded', function() {
       // Try to access the camera
       stream = await navigator.mediaDevices.getUserMedia(constraints);
       video.srcObject = stream;
+      
+      // Wait for video metadata to load to get correct dimensions
+      video.onloadedmetadata = function() {
+        console.log(`Video dimensions: ${video.videoWidth}x${video.videoHeight}`);
+        // Set initial canvas size to match video
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      };
+      
       video.style.display = 'block'; // Show video element
       canvas.style.display = 'none'; // Hide canvas initially
       toggleCameraButton.textContent = "Stop Camera";
@@ -165,8 +178,27 @@ document.addEventListener('DOMContentLoaded', function() {
       // Capture frames and send them to backend
       captureInterval = setInterval(() => {
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
+          // Ensure canvas dimensions match video dimensions (important for mobile)
+          if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            console.log(`Updated canvas dimensions: ${canvas.width}x${canvas.height}`);
+          }
+          
+          // Draw the current video frame to the canvas
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob(sendToBackend, 'image/jpeg', 0.8);
+          
+          // Create blob from canvas and send to backend
+          canvas.toBlob((blob) => {
+            if (blob && blob.size > 0) {
+              console.log(`Created image blob of size: ${blob.size} bytes`);
+              sendToBackend(blob);
+            } else {
+              console.error("Failed to create valid blob from canvas");
+            }
+          }, 'image/jpeg', 0.8);
+        } else {
+          console.log("Video not ready for capture");
         }
       }, 1000); // Capture every second
       
@@ -329,6 +361,8 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
     
+    console.log("Sending image to backend for detection");
+    
     const formData = new FormData();
     formData.append('image', blob, 'frame.jpg');
 
@@ -336,12 +370,16 @@ document.addEventListener('DOMContentLoaded', function() {
       method: 'POST',
       body: formData,
     })
-    .then(response => response.json())
+    .then(response => {
+      console.log("Response received from server:", response.status);
+      return response.json();
+    })
     .then(data => {
       if (data.predictions && data.predictions.length > 0) {
-        console.log(data.predictions);
+        console.log("Predictions received:", data.predictions.length);
         drawPredictions(data.predictions);
       } else {
+        console.log("No predictions found in response");
         // If no predictions, just show the video
         canvas.style.display = 'none';
         video.style.display = 'block';
@@ -353,7 +391,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       }
     })
-    .catch(error => console.error('Error:', error));
+    .catch(error => {
+      console.error('Error sending to backend:', error);
+    });
   }
 
   // Draw predictions on camera canvas
