@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, Response, send_file
+from flask import Flask, request, jsonify, render_template, Response, send_file, make_response
 from flask_cors import CORS
 import cv2
 import os
@@ -11,9 +11,10 @@ from inference import get_model
 import json
 import csv
 from datetime import datetime
+import tempfile
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Roboflow settings
 ROBOFLOW_API_KEY = "uqtcwMn8hclMSRPn3Tlc"
@@ -101,11 +102,20 @@ def generate_frames():
     global output_frame, lock, camera
     
     if camera is None:
-        camera = cv2.VideoCapture(0)
+        try:
+            camera = cv2.VideoCapture(0)
+        except Exception as e:
+            print(f"Error initializing camera: {e}")
+            return
     
     while True:
+        if camera is None or not camera.isOpened():
+            print("Camera is not available")
+            break
+            
         success, frame = camera.read()
         if not success:
+            print("Failed to read frame")
             break
         
         processed_frame, _ = process_frame(frame)
@@ -130,16 +140,47 @@ def video_feed():
 
 @app.route('/detect', methods=['POST'])
 def detect():
-    if 'image' not in request.files:
+    if 'image' not in request.files and 'image' not in request.form:
         return jsonify({"error": "No image provided"}), 400
     
-    image_file = request.files['image']
     try:
-        image_bytes = image_file.read()
+        # Handle both file upload and base64 encoded image
+        if 'image' in request.files:
+            image_file = request.files['image']
+            image_bytes = image_file.read()
+        else:
+            # Handle base64 encoded image from mobile devices
+            base64_image = request.form['image']
+            # Remove data URL prefix if present
+            if 'base64,' in base64_image:
+                base64_image = base64_image.split('base64,')[1]
+            image_bytes = base64.b64decode(base64_image)
+        
         print(f"Received image of size: {len(image_bytes)} bytes")
         
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            return jsonify({"error": "Could not decode image"}), 400
+            
+        # Handle image orientation for mobile devices
+        # Try to open with PIL to check for EXIF orientation
+        try:
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            if hasattr(pil_img, '_getexif') and pil_img._getexif() is not None:
+                exif = dict(pil_img._getexif().items())
+                orientation = exif.get(274, 1)  # 274 is the EXIF orientation tag
+                
+                # Rotate according to EXIF orientation
+                if orientation == 3:
+                    img = cv2.rotate(img, cv2.ROTATE_180)
+                elif orientation == 6:
+                    img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+                elif orientation == 8:
+                    img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        except Exception as e:
+            print(f"Error handling EXIF orientation: {e}")
         
         processed_frame, predictions = process_frame(img)
         
@@ -158,17 +199,17 @@ def detect():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# Add new routes for downloading results
+# Updated download routes for mobile compatibility
 @app.route('/download_csv')
 def download_csv():
     try:
         if len(detection_results) == 0:
             return jsonify({"error": "No detection results available"}), 404
             
-        filename = f"gravel_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        filepath = os.path.join(results_dir, filename)
+        # Create a temporary file
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.csv')
         
-        with open(filepath, 'w', newline='') as csvfile:
+        with os.fdopen(temp_fd, 'w', newline='') as csvfile:
             fieldnames = ['timestamp', 'class', 'confidence', 'x', 'y', 'width', 'height']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             
@@ -176,7 +217,20 @@ def download_csv():
             for result in detection_results:
                 writer.writerow(result)
         
-        return send_file(filepath, as_attachment=True, download_name=filename)
+        filename = f"gravel_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        # Create proper response with correct headers
+        response = make_response(send_file(temp_path, as_attachment=True, download_name=filename))
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        response.headers["Content-Type"] = "text/csv"
+        
+        # Clean up temp file after request
+        @response.call_on_close
+        def cleanup():
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+        return response
     
     except Exception as e:
         print(f"Error generating CSV: {e}")
@@ -188,17 +242,35 @@ def download_json():
         if len(detection_results) == 0:
             return jsonify({"error": "No detection results available"}), 404
             
-        filename = f"gravel_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = os.path.join(results_dir, filename)
+        # Create a temporary file
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.json')
         
-        with open(filepath, 'w') as jsonfile:
+        with os.fdopen(temp_fd, 'w') as jsonfile:
             json.dump(detection_results, jsonfile, indent=4)
         
-        return send_file(filepath, as_attachment=True, download_name=filename)
+        filename = f"gravel_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        # Create proper response with correct headers
+        response = make_response(send_file(temp_path, as_attachment=True, download_name=filename))
+        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
+        response.headers["Content-Type"] = "application/json"
+        
+        # Clean up temp file after request
+        @response.call_on_close
+        def cleanup():
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+        return response
     
     except Exception as e:
         print(f"Error generating JSON: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/get_results')
+def get_results():
+    """Return current detection results as JSON without downloading"""
+    return jsonify(detection_results)
 
 @app.route('/clear_results')
 def clear_results():
@@ -208,4 +280,5 @@ def clear_results():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Set threaded=True for better mobile compatibility
+    app.run(host='0.0.0.0', port=port, debug=True, threaded=True)

@@ -131,14 +131,15 @@ document.addEventListener('DOMContentLoaded', function() {
       // Configure camera constraints based on device
       let constraints = { video: {} };
       
-      // For mobile: use facingMode constraint
+      // For mobile: use facingMode constraint with lower resolution
       if (/Mobi|Android/i.test(navigator.userAgent)) {
+        // Lower resolution on mobile to improve performance
         constraints.video = { 
           facingMode: currentFacingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+          width: { ideal: 720 },  // Reduced from 1280
+          height: { ideal: 480 }  // Reduced from 720
         };
-        console.log(`Using ${currentFacingMode === 'user' ? 'front' : 'back'} camera with specified dimensions`);
+        console.log(`Using ${currentFacingMode === 'user' ? 'front' : 'back'} camera with reduced dimensions`);
       } 
       // For desktop: use deviceId if available
       else if (availableCameras.length > 0) {
@@ -188,7 +189,10 @@ document.addEventListener('DOMContentLoaded', function() {
           // Draw the current video frame to the canvas
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           
-          // Create blob from canvas and send to backend
+          // Create blob from canvas and send to backend with reduced quality for mobile
+          const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+          const quality = isMobile ? 0.7 : 0.8; // Lower quality for mobile
+          
           canvas.toBlob((blob) => {
             if (blob && blob.size > 0) {
               console.log(`Created image blob of size: ${blob.size} bytes`);
@@ -196,7 +200,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
               console.error("Failed to create valid blob from canvas");
             }
-          }, 'image/jpeg', 0.8);
+          }, 'image/jpeg', quality);
         } else {
           console.log("Video not ready for capture");
         }
@@ -257,40 +261,101 @@ document.addEventListener('DOMContentLoaded', function() {
         
         document.getElementById('cameraContainer').appendChild(resultsDiv);
         
-        const formData = new FormData();
-        formData.append('image', file);
-
-        fetch('/detect', {
-          method: 'POST',
-          body: formData,
-        })
-        .then(response => response.json())
-        .then(data => {
-          // Remove the loading message
-          resultsDiv.remove();
-          
-          if (data.predictions && data.predictions.length > 0) {
-            // Show the uploaded image with bounding boxes
-            showImageWithBoundingBoxes(file, data.predictions);
-          } else {
-            // Show "no gravels detected" message
-            const noGravelsDiv = document.createElement('div');
-            noGravelsDiv.className = 'prediction-results';
-            noGravelsDiv.innerHTML = '<p>No gravels detected in this image.</p>';
-            document.getElementById('cameraContainer').appendChild(noGravelsDiv);
-          }
-        })
-        .catch(error => {
-          console.error('Error:', error);
-          // Show error message
-          const errorDiv = document.createElement('div');
-          errorDiv.className = 'prediction-results';
-          errorDiv.innerHTML = '<p>Error processing image. Please try again.</p>';
-          document.getElementById('cameraContainer').appendChild(errorDiv);
-        });
+        // Check if we need to resize the image before uploading (for mobile)
+        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+        
+        if (isMobile && file.size > 1000000) { // If over 1MB on mobile
+          console.log("Large file detected, resizing before upload");
+          // Create a FileReader to read the file
+          const reader = new FileReader();
+          reader.onload = function(e) {
+            const img = new Image();
+            img.onload = function() {
+              // Create a canvas to resize the image
+              const canvas = document.createElement('canvas');
+              let width = img.width;
+              let height = img.height;
+              
+              // Calculate new dimensions (max 800px in any dimension)
+              const maxDim = 800;
+              if (width > height) {
+                if (width > maxDim) {
+                  height = Math.round(height * maxDim / width);
+                  width = maxDim;
+                }
+              } else {
+                if (height > maxDim) {
+                  width = Math.round(width * maxDim / height);
+                  height = maxDim;
+                }
+              }
+              
+              canvas.width = width;
+              canvas.height = height;
+              
+              // Draw resized image
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, width, height);
+              
+              // Convert to blob and upload
+              canvas.toBlob((blob) => {
+                console.log(`Resized image from ${file.size} to ${blob.size} bytes`);
+                uploadImage(blob);
+              }, 'image/jpeg', 0.75);
+            };
+            img.src = e.target.result;
+          };
+          reader.readAsDataURL(file);
+        } else {
+          // Upload original file if not on mobile or file is small enough
+          uploadImage(file);
+        }
       } else {
         alert('Please select an image file first');
       }
+    });
+  }
+  
+  // Function to upload image and process response
+  function uploadImage(imageBlob) {
+    const formData = new FormData();
+    formData.append('image', imageBlob);
+    
+    fetch('/detect', {
+      method: 'POST',
+      body: formData,
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Server error: ' + response.status);
+      }
+      return response.json();
+    })
+    .then(data => {
+      // Remove the loading message
+      const loadingDiv = document.querySelector('.prediction-results');
+      if (loadingDiv) {
+        loadingDiv.remove();
+      }
+      
+      if (data.predictions && data.predictions.length > 0) {
+        // Show the uploaded image with bounding boxes
+        showImageWithBoundingBoxes(imageBlob, data.predictions);
+      } else {
+        // Show "no gravels detected" message
+        const noGravelsDiv = document.createElement('div');
+        noGravelsDiv.className = 'prediction-results';
+        noGravelsDiv.innerHTML = '<p>No gravels detected in this image.</p>';
+        document.getElementById('cameraContainer').appendChild(noGravelsDiv);
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      // Show error message
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'prediction-results';
+      errorDiv.innerHTML = '<p>Error processing image. Please try again.</p>';
+      document.getElementById('cameraContainer').appendChild(errorDiv);
     });
   }
 
@@ -363,7 +428,7 @@ document.addEventListener('DOMContentLoaded', function() {
     };
   }
 
-  // Send captured frame to Flask backend for predictions
+  // Send captured frame to Flask backend for predictions with image optimization
   function sendToBackend(blob) {
     // Only send data if camera is on
     if (!isCameraOn) {
@@ -372,15 +437,77 @@ document.addEventListener('DOMContentLoaded', function() {
     
     console.log("Sending image to backend for detection");
     
-    const formData = new FormData();
-    formData.append('image', blob, 'frame.jpg');
-
+    // Check if we need to resize for mobile
+    const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+    
+    if (isMobile && blob.size > 500000) { // If larger than 500KB on mobile
+      console.log("Large image on mobile, resizing before sending");
+      
+      // Create an image from blob
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      
+      img.onload = function() {
+        // Create a canvas for resizing
+        const resizeCanvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        
+        // Calculate new dimensions (max 640px in any dimension for mobile)
+        const maxDim = 640;
+        if (width > height) {
+          if (width > maxDim) {
+            height = Math.round(height * maxDim / width);
+            width = maxDim;
+          }
+        } else {
+          if (height > maxDim) {
+            width = Math.round(width * maxDim / height);
+            height = maxDim;
+          }
+        }
+        
+        resizeCanvas.width = width;
+        resizeCanvas.height = height;
+        
+        // Draw resized image
+        const resizeCtx = resizeCanvas.getContext('2d');
+        resizeCtx.drawImage(img, 0, 0, width, height);
+        
+        // Convert to blob with lower quality
+        resizeCanvas.toBlob((resizedBlob) => {
+          console.log(`Resized from ${blob.size} to ${resizedBlob.size} bytes`);
+          
+          const formData = new FormData();
+          formData.append('image', resizedBlob, 'frame.jpg');
+          
+          sendFormData(formData);
+          
+          // Clean up
+          URL.revokeObjectURL(url);
+        }, 'image/jpeg', 0.7); // 70% quality for mobile
+      };
+      
+      img.src = url;
+    } else {
+      // Send original if not mobile or small enough
+      const formData = new FormData();
+      formData.append('image', blob, 'frame.jpg');
+      sendFormData(formData);
+    }
+  }
+  
+  // Function to handle sending form data and processing response
+  function sendFormData(formData) {
     fetch('/detect', {
       method: 'POST',
       body: formData,
     })
     .then(response => {
       console.log("Response received from server:", response.status);
+      if (!response.ok) {
+        throw new Error('Server error: ' + response.status);
+      }
       return response.json();
     })
     .then(data => {
@@ -405,6 +532,23 @@ document.addEventListener('DOMContentLoaded', function() {
     })
     .catch(error => {
       console.error('Error sending to backend:', error);
+      
+      // Show error notification
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'prediction-results error';
+      errorDiv.innerHTML = '<p>Error connecting to server. Please try again.</p>';
+      
+      // Remove any previous results
+      const oldResults = document.querySelector('.prediction-results');
+      if (oldResults) {
+        oldResults.remove();
+      }
+      
+      document.getElementById('cameraContainer').appendChild(errorDiv);
+      
+      // Switch back to video display
+      canvas.style.display = 'none';
+      video.style.display = 'block';
     });
   }
 
@@ -445,18 +589,26 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Draw with more visible colors on mobile
       ctx.strokeStyle = '#00FF00'; // Bright green
-      ctx.lineWidth = Math.max(2, canvas.width / 200); // Thicker lines on higher resolution displays
+      ctx.lineWidth = Math.max(3, canvas.width / 150); // Thicker lines for better visibility
       ctx.strokeRect(x, y, width, height);
       
       // Label with better visibility
       const label = pred.label || pred.class || 'Object';
       const confidence = pred.confidence || pred.score || 0;
       
-      ctx.fillStyle = '#00FF00'; // Bright green
+      // Add background to text for better visibility
       const fontSize = Math.max(16, canvas.width / 40); // Responsive font size
       ctx.font = `${fontSize}px sans-serif`;
-      ctx.fillText(`${label} ${(confidence * 100).toFixed(1)}%`, 
-                   x, y > fontSize ? y - 5 : y + fontSize + 5);
+      const labelText = `${label} ${(confidence * 100).toFixed(1)}%`;
+      const textWidth = ctx.measureText(labelText).width;
+      
+      // Draw text background
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(x, y > fontSize ? y - fontSize - 5 : y + 5, textWidth + 6, fontSize + 4);
+      
+      // Draw text
+      ctx.fillStyle = '#FFFFFF'; // White text
+      ctx.fillText(labelText, x + 3, y > fontSize ? y - 5 : y + fontSize + 5);
     });
     
     // Show canvas with predictions
@@ -514,7 +666,7 @@ document.addEventListener('DOMContentLoaded', function() {
       });
   }
 
-  // UPDATED: Function to show download buttons after detections with direct links for mobile
+  // UPDATED download options function that works on mobile
   function addDownloadOptions() {
     // Check if download section already exists
     const existingDownloadSection = document.querySelector('.download-options');
@@ -528,49 +680,126 @@ document.addEventListener('DOMContentLoaded', function() {
     
     const isMobile = /Mobi|Android/i.test(navigator.userAgent);
     
-    if (isMobile) {
-      // Create direct links for mobile
-      const csvLink = document.createElement('a');
-      csvLink.href = '/download_csv';
-      csvLink.textContent = 'Download Results (CSV)';
-      csvLink.className = 'download-button';
-      csvLink.setAttribute('download', ''); // Force download attribute
+    // For both mobile and desktop: Use programmatic download approach
+    const csvButton = document.createElement('button');
+    csvButton.textContent = 'Download Results (CSV)';
+    csvButton.className = 'download-button';
+    csvButton.onclick = function() {
+      // Show loading status
+      this.textContent = 'Downloading...';
+      this.disabled = true;
       
-      const jsonLink = document.createElement('a');  
-      jsonLink.href = '/download_json';
-      jsonLink.textContent = 'Download Results (JSON)';
-      jsonLink.className = 'download-button';
-      jsonLink.setAttribute('download', ''); // Force download attribute
-      
-      const clearButton = document.createElement('button');
-      clearButton.textContent = 'Clear Results';
-      clearButton.onclick = clearResults;
-      
-      // Add links/buttons to container
-      downloadDiv.appendChild(csvLink);
-      downloadDiv.appendChild(jsonLink);
-      downloadDiv.appendChild(clearButton);
-    } else {
-      // Create download buttons for desktop
-      const csvButton = document.createElement('button');
-      csvButton.textContent = 'Download Results (CSV)';
-      csvButton.onclick = () => window.location.href = '/download_csv';
-      
-      const jsonButton = document.createElement('button');
-      jsonButton.textContent = 'Download Results (JSON)';
-      jsonButton.onclick = () => window.location.href = '/download_json';
-      
-      const clearButton = document.createElement('button');
-      clearButton.textContent = 'Clear Results';
-      clearButton.onclick = clearResults;
-      
-      // Add buttons to container
-      downloadDiv.appendChild(csvButton);
-      downloadDiv.appendChild(jsonButton);
-      downloadDiv.appendChild(clearButton);
-    }
+      // Use fetch API to download file
+      fetch('/download_csv')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Download failed with status: ' + response.status);
+          }
+          return response.blob();
+        })
+        .then(blob => {
+          // Create a download link and trigger it
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `gravel_detection_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+          document.body.appendChild(a);
+          a.click();
+          
+          // Clean up
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          
+          // Reset button
+          csvButton.textContent = 'Download Results (CSV)';
+          csvButton.disabled = false;
+        })
+        .catch(error => {
+          console.error('Download error:', error);
+          alert('Download failed. Please try again.');
+          csvButton.textContent = 'Download Results (CSV)';
+          csvButton.disabled = false;
+        });
+    };
     
-    // Add the container to the page
+    const jsonButton = document.createElement('button');
+    jsonButton.textContent = 'Download Results (JSON)';
+    jsonButton.className = 'download-button';
+    jsonButton.onclick = function() {
+      // Show loading status
+      this.textContent = 'Downloading...';
+      this.disabled = true;
+      
+      // Use fetch API to download file
+      fetch('/download_json')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Download failed with status: ' + response.status);
+          }
+          return response.blob();
+        })
+        .then(blob => {
+          // Create a download link and trigger it
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = `gravel_detection_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+          document.body.appendChild(a);
+          a.click();
+          
+          // Clean up
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          
+          // Reset button
+          jsonButton.textContent = 'Download Results (JSON)';
+          jsonButton.disabled = false;
+        })
+        .catch(error => {
+          console.error('Download error:', error);
+          alert('Download failed. Please try again.');
+          jsonButton.textContent = 'Download Results (JSON)';
+          jsonButton.disabled = false;
+        });
+    };
+    
+    const clearButton = document.createElement('button');
+    clearButton.textContent = 'Clear Results';
+    clearButton.className = 'clear-button';
+    clearButton.onclick = function() {
+      this.textContent = 'Clearing...';
+      this.disabled = true;
+      
+      fetch('/clear_results')
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Server error: ' + response.status);
+          }
+          return response.json();
+        })
+        .then(data => {
+          alert(data.message);
+          clearButton.textContent = 'Clear Results';
+          clearButton.disabled = false;
+        })
+        .catch(error => {
+          console.error('Error:', error);
+          alert('Error clearing results. Please try again.');
+          clearButton.textContent = 'Clear Results';
+          clearButton.disabled = false;
+        });
+    };
+    
+    // Add buttons to container with some spacing
+    downloadDiv.appendChild(csvButton);
+    downloadDiv.appendChild(document.createTextNode(' '));
+    downloadDiv.appendChild(jsonButton);
+    downloadDiv.appendChild(document.createTextNode(' '));
+    downloadDiv.appendChild(clearButton);
+    
+    // Add the download options to the page
     document.getElementById('cameraContainer').appendChild(downloadDiv);
   }
 });
