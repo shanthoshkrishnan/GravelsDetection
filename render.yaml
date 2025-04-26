@@ -3,9 +3,5 @@ services:
     env: python
     runtime: python3.10
     buildCommand: bash render-build.sh
-    startCommand: gunicorn app:app
-    buildFilter:
-      - "src/**"
-    paths:
-      - /app
-    rootDir: /opt/render/project/src
+    startCommand: python app.py
+    rootDir: src

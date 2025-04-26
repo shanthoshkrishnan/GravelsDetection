@@ -6,6 +6,7 @@ import numpy as np
 import threading
 import base64
 import io
+import time
 from PIL import Image
 from inference import get_model
 import json
@@ -14,17 +15,24 @@ from datetime import datetime
 import tempfile
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Allow all origins, methods and headers for better mobile compatibility
+CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST"], "allow_headers": "*"}})
 
 # Roboflow settings
 ROBOFLOW_API_KEY = "uqtcwMn8hclMSRPn3Tlc"
 MODEL_ID = "gravels/1"
 
 # Load model once globally
-model = get_model(MODEL_ID, api_key=ROBOFLOW_API_KEY)
+try:
+    model = get_model(MODEL_ID, api_key=ROBOFLOW_API_KEY)
+    print("Model loaded successfully")
+except Exception as e:
+    print(f"Error loading model: {e}")
+    model = None
 
 # Global variables for the video stream
 camera = None
+camera_active = False
 output_frame = None
 lock = threading.Lock()
 
@@ -36,6 +44,10 @@ if not os.path.exists(results_dir):
 
 def process_frame(frame):
     try:
+        if model is None:
+            print("Model not loaded, skipping inference")
+            return frame, []
+            
         # Convert to bytes format that Roboflow expects
         success, buffer = cv2.imencode('.jpg', frame)
         img_bytes = buffer.tobytes()
@@ -99,35 +111,55 @@ def process_frame(frame):
         return frame, []
 
 def generate_frames():
-    global output_frame, lock, camera
+    global output_frame, lock, camera, camera_active
     
-    if camera is None:
-        try:
+    try:
+        if camera is None:
             camera = cv2.VideoCapture(0)
-        except Exception as e:
-            print(f"Error initializing camera: {e}")
-            return
-    
-    while True:
-        if camera is None or not camera.isOpened():
-            print("Camera is not available")
-            break
+            if not camera.isOpened():
+                print("Failed to open camera. Trying with alternative index.")
+                camera = cv2.VideoCapture(1)  # Try another camera index
+                
+            # Set lower resolution for better performance
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             
-        success, frame = camera.read()
-        if not success:
-            print("Failed to read frame")
-            break
-        
-        processed_frame, _ = process_frame(frame)
-        
-        with lock:
-            output_frame = processed_frame.copy()
-        
-        ret, buffer = cv2.imencode('.jpg', output_frame)
-        frame_bytes = buffer.tobytes()
-        
+        camera_active = True
+    except Exception as e:
+        print(f"Error initializing camera: {e}")
+        camera_active = False
         yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+               b'Content-Type: text/plain\r\n\r\n'
+               b'Camera initialization failed\r\n')
+        return
+    
+    while camera_active:
+        try:
+            if camera is None or not camera.isOpened():
+                print("Camera is not available")
+                time.sleep(1)  # Wait before trying again
+                continue
+                
+            success, frame = camera.read()
+            if not success:
+                print("Failed to read frame")
+                time.sleep(0.1)  # Short delay before next attempt
+                continue
+            
+            processed_frame, _ = process_frame(frame)
+            
+            with lock:
+                output_frame = processed_frame.copy()
+            
+            ret, buffer = cv2.imencode('.jpg', output_frame)
+            frame_bytes = buffer.tobytes()
+            
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                   
+        except Exception as e:
+            print(f"Error in generate_frames: {e}")
+            time.sleep(0.5)  # Add delay to avoid tight loop on error
 
 @app.route('/')
 def index():
@@ -137,6 +169,24 @@ def index():
 def video_feed():
     return Response(generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/toggle_camera', methods=['POST'])
+def toggle_camera():
+    global camera, camera_active
+    
+    try:
+        if camera_active:
+            camera_active = False
+            if camera is not None:
+                camera.release()
+                camera = None
+            return jsonify({"status": "Camera stopped"})
+        else:
+            # Camera will be initialized in generate_frames
+            camera_active = True
+            return jsonify({"status": "Camera started"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/detect', methods=['POST'])
 def detect():
@@ -199,41 +249,41 @@ def detect():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# Updated download routes for mobile compatibility
+# Fixed download routes for all devices
 @app.route('/download_csv')
 def download_csv():
     try:
         if len(detection_results) == 0:
             return jsonify({"error": "No detection results available"}), 404
             
-        # Create a temporary file
-        temp_fd, temp_path = tempfile.mkstemp(suffix='.csv')
+        # Directly create the CSV content in memory
+        csv_data = io.StringIO()
+        fieldnames = ['timestamp', 'class', 'confidence', 'x', 'y', 'width', 'height']
+        writer = csv.DictWriter(csv_data, fieldnames=fieldnames)
         
-        with os.fdopen(temp_fd, 'w', newline='') as csvfile:
-            fieldnames = ['timestamp', 'class', 'confidence', 'x', 'y', 'width', 'height']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for result in detection_results:
+            writer.writerow(result)
             
-            writer.writeheader()
-            for result in detection_results:
-                writer.writerow(result)
+        csv_content = csv_data.getvalue()
+        csv_data.close()
         
+        # Create response with CSV data
         filename = f"gravel_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
-        # Create proper response with correct headers
-        response = make_response(send_file(temp_path, as_attachment=True, download_name=filename))
+        response = make_response(csv_content)
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
         response.headers["Content-Type"] = "text/csv"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["Content-Length"] = str(len(csv_content))
         
-        # Clean up temp file after request
-        @response.call_on_close
-        def cleanup():
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
         return response
     
     except Exception as e:
         print(f"Error generating CSV: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/download_json')
@@ -242,29 +292,25 @@ def download_json():
         if len(detection_results) == 0:
             return jsonify({"error": "No detection results available"}), 404
             
-        # Create a temporary file
-        temp_fd, temp_path = tempfile.mkstemp(suffix='.json')
+        # Directly create JSON in memory
+        json_content = json.dumps(detection_results, indent=4)
         
-        with os.fdopen(temp_fd, 'w') as jsonfile:
-            json.dump(detection_results, jsonfile, indent=4)
-        
+        # Create response with JSON data
         filename = f"gravel_detection_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        # Create proper response with correct headers
-        response = make_response(send_file(temp_path, as_attachment=True, download_name=filename))
+        response = make_response(json_content)
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
         response.headers["Content-Type"] = "application/json"
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["Content-Length"] = str(len(json_content))
         
-        # Clean up temp file after request
-        @response.call_on_close
-        def cleanup():
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
         return response
     
     except Exception as e:
         print(f"Error generating JSON: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/get_results')
@@ -278,7 +324,14 @@ def clear_results():
     detection_results = []
     return jsonify({"message": "Detection results cleared"})
 
+# Health check endpoint
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "ok", "camera_active": camera_active})
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
     # Set threaded=True for better mobile compatibility
     app.run(host='0.0.0.0', port=port, debug=True, threaded=True)
+
+    
